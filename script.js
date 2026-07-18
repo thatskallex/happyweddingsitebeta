@@ -62,7 +62,7 @@ if (googleCalendarLink) {
 const PHOTO_UPLOAD_SETTINGS = {
     publicKey: 'e87b8fad31c881627cac',
     endpoint: 'https://upload.uploadcare.com/base/',
-    maxFilesPerBatch: 12,
+    maxFilesPerGuest: 12,
     maxFileSize: 100 * 1024 * 1024,
     concurrentUploads: 3,
     eventTag: 'ksenia-aleksandr-wedding-2026'
@@ -322,10 +322,29 @@ function setPhotoStatus(message, type = '') {
     uploadStatus.classList.toggle('is-success', type === 'success');
 }
 
+function getUploadedPhotoTotal() {
+    return Math.max(
+        0,
+        Number(safeLocalStorageGet(PHOTO_STORAGE_KEYS.uploadedTotal, '0')) || 0
+    );
+}
+
+function getPendingPhotoCount() {
+    return selectedPhotos.filter((photo) => photo.status !== 'success').length;
+}
+
+function getRemainingPhotoCount() {
+    return Math.max(
+        0,
+        PHOTO_UPLOAD_SETTINGS.maxFilesPerGuest
+            - getUploadedPhotoTotal()
+            - getPendingPhotoCount()
+    );
+}
+
 function updateFilmCounter() {
     if (!filmLeftEl) return;
-    const activeCount = selectedPhotos.filter((photo) => photo.status !== 'success').length;
-    filmLeftEl.textContent = String(Math.max(0, PHOTO_UPLOAD_SETTINGS.maxFilesPerBatch - activeCount));
+    filmLeftEl.textContent = String(getRemainingPhotoCount());
 }
 
 function updatePhotoControls() {
@@ -334,8 +353,10 @@ function updatePhotoControls() {
 
     if (photoSelection) photoSelection.hidden = !hasPhotos;
     if (uploadPhotosButton) uploadPhotosButton.disabled = !hasPendingPhotos || isUploadingPhotos;
-    if (cameraButton) cameraButton.disabled = isUploadingPhotos || selectedPhotos.length >= PHOTO_UPLOAD_SETTINGS.maxFilesPerBatch;
-    if (galleryButton) galleryButton.disabled = isUploadingPhotos || selectedPhotos.length >= PHOTO_UPLOAD_SETTINGS.maxFilesPerBatch;
+    const hasFreeFrames = getRemainingPhotoCount() > 0;
+
+    if (cameraButton) cameraButton.disabled = isUploadingPhotos || !hasFreeFrames;
+    if (galleryButton) galleryButton.disabled = isUploadingPhotos || !hasFreeFrames;
     if (clearPhotosButton) clearPhotosButton.disabled = isUploadingPhotos;
     if (guestNameInput) guestNameInput.disabled = isUploadingPhotos;
     if (photoNoteInput) photoNoteInput.disabled = isUploadingPhotos;
@@ -420,7 +441,7 @@ function addPhotos(fileList) {
     const acceptable = imageFiles.filter((file) => file.size <= PHOTO_UPLOAD_SETTINGS.maxFileSize);
     const existingKeys = new Set(selectedPhotos.map((photo) => `${photo.file.name}-${photo.file.size}-${photo.file.lastModified}`));
     const uniqueFiles = acceptable.filter((file) => !existingKeys.has(`${file.name}-${file.size}-${file.lastModified}`));
-    const slotsLeft = Math.max(0, PHOTO_UPLOAD_SETTINGS.maxFilesPerBatch - selectedPhotos.length);
+    const slotsLeft = getRemainingPhotoCount();
     const filesToAdd = uniqueFiles.slice(0, slotsLeft);
 
     filesToAdd.forEach((file) => {
@@ -439,7 +460,7 @@ function addPhotos(fileList) {
     const messages = [];
     if (files.length !== imageFiles.length) messages.push('файлы не в формате изображения пропущены');
     if (tooLarge.length) messages.push('фотографии больше 100 МБ пропущены');
-    if (uniqueFiles.length > slotsLeft) messages.push(`можно выбрать не больше ${PHOTO_UPLOAD_SETTINGS.maxFilesPerBatch} кадров за раз`);
+    if (uniqueFiles.length > slotsLeft) messages.push(`с этого устройства можно отправить не больше ${PHOTO_UPLOAD_SETTINGS.maxFilesPerGuest} фотографий всего`);
 
     if (messages.length) setPhotoStatus(messages.join(' · '), 'error');
     else if (filesToAdd.length) setPhotoStatus(`выбрано фотографий: ${selectedPhotos.length}`);
@@ -593,7 +614,15 @@ async function uploadSelectedPhotos() {
 
     isUploadingPhotos = false;
     const previousUploadedTotal = Math.max(0, Number(safeLocalStorageGet(PHOTO_STORAGE_KEYS.uploadedTotal, '0')) || 0);
-    safeLocalStorageSet(PHOTO_STORAGE_KEYS.uploadedTotal, String(previousUploadedTotal + successCount));
+    safeLocalStorageSet(
+        PHOTO_STORAGE_KEYS.uploadedTotal,
+        String(
+            Math.min(
+                PHOTO_UPLOAD_SETTINGS.maxFilesPerGuest,
+                previousUploadedTotal + successCount
+            )
+        )
+    );
     renderPhotoPreviews();
 
     if (!errorCount) {
