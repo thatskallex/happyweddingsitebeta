@@ -13,7 +13,6 @@ function updateCountdown() {
 
     const distance = weddingDate - Date.now();
     const safeDistance = Math.max(distance, 0);
-
     const days = Math.floor(safeDistance / (1000 * 60 * 60 * 24));
     const hours = Math.floor((safeDistance / (1000 * 60 * 60)) % 24);
     const minutes = Math.floor((safeDistance / (1000 * 60)) % 60);
@@ -29,41 +28,29 @@ setInterval(updateCountdown, 1000);
 const googleCalendarLink = document.querySelector('#googleCalendarLink');
 
 if (googleCalendarLink) {
-    const title = 'Свадьба Ксении и Александра';
-    const start = '20260723T105000Z';
-    const end = '20260723T180000Z';
-    const location = 'РАГС Петродворцового района; Гранд Петергоф отель';
-    const details = [
-        '13:50–14:20 — роспись в РАГС Петродворцового района',
-        '15:00–16:00 — фуршет возле Гранд Петергофа',
-        '16:00–21:00 — мероприятие в шатре Гранд Петергоф'
-    ].join('\n');
-
     const params = new URLSearchParams({
         action: 'TEMPLATE',
-        text: title,
-        dates: `${start}/${end}`,
-        details,
-        location
+        text: 'Свадьба Ксении и Александра',
+        dates: '20260723T105000Z/20260723T180000Z',
+        details: [
+            '13:50–14:20 — роспись в РАГС Петродворцового района',
+            '15:00–16:00 — фуршет возле Гранд Петергофа',
+            '16:00–21:00 — мероприятие в шатре Гранд Петергоф'
+        ].join('\n'),
+        location: 'РАГС Петродворцового района; Гранд Петергоф отель'
     });
 
     googleCalendarLink.href = `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
-/*
- * ЗАГРУЗКА ФОТОГРАФИЙ
- *
- * 1. Создайте отдельный проект на uploadcare.com.
- * 2. Включите Auto-store или оставьте UPLOADCARE_STORE = 1 ниже.
- * 3. Вставьте PUBLIC KEY вместо YOUR_UPLOADCARE_PUBLIC_KEY.
- *
- * Public Key можно хранить в открытом JavaScript. Secret Key сюда добавлять нельзя.
- */
+const PUBLIC_CONFIG = window.WEDDING_APP_CONFIG || {};
 const PHOTO_UPLOAD_SETTINGS = {
-    publicKey: 'e87b8fad31c881627cac',
+    publicKey: String(PUBLIC_CONFIG.uploadcarePublicKey || '').trim(),
+    workerUrl: String(PUBLIC_CONFIG.workerUrl || '').trim().replace(/\/$/, ''),
+    signedUploads: PUBLIC_CONFIG.signedUploads === true,
     endpoint: 'https://upload.uploadcare.com/base/',
-    maxFilesPerGuest: 12,
-    maxFileSize: 100 * 1024 * 1024,
+    maxFilesPerGuest: Math.max(1, Number(PUBLIC_CONFIG.maxFilesPerGuest) || 21),
+    maxFileSize: 99 * 1024 * 1024,
     concurrentUploads: 3,
     eventTag: 'ksenia-aleksandr-wedding-2026'
 };
@@ -209,17 +196,30 @@ const uploadStatus = document.querySelector('[data-photo-upload-status]');
 const filmLeftEl = document.querySelector('[data-film-left]');
 const guestNameInput = document.querySelector('[data-photo-guest-name]');
 const photoNoteInput = document.querySelector('[data-photo-note]');
+const deviceCodeEls = document.querySelectorAll('[data-device-code], [data-refill-device-code]');
+const filmRefill = document.querySelector('[data-film-refill]');
+const checkRefillButton = document.querySelector('[data-check-refill]');
+const toggleRedeemButton = document.querySelector('[data-toggle-redeem]');
+const filmCodeForm = document.querySelector('[data-film-code-form]');
+const filmCodeInput = document.querySelector('[data-film-code-input]');
+const filmRefillStatus = document.querySelector('[data-film-refill-status]');
+const filmCard = document.querySelector('.film-card');
 
 const PHOTO_STORAGE_KEYS = {
     currentMission: 'weddingPhotoMission',
     recentMissions: 'weddingPhotoRecentMissions',
     completedMissions: 'weddingPhotoCompletedMissions',
     guestName: 'weddingPhotoGuestName',
-    uploadedTotal: 'weddingPhotoUploadedTotal'
+    uploadedTotal: 'weddingPhotoUploadedTotal',
+    deviceId: 'weddingPhotoDeviceId',
+    pendingConfirmations: 'weddingPhotoPendingConfirmations',
+    cachedFilmState: 'weddingPhotoCachedFilmState'
 };
 
 let selectedPhotos = [];
 let isUploadingPhotos = false;
+let serverFilmState = null;
+let isSyncingFilmState = false;
 
 function safeLocalStorageGet(key, fallback = '') {
     try {
@@ -237,13 +237,226 @@ function safeLocalStorageSet(key, value) {
     }
 }
 
-function getRecentMissionIndexes() {
+function safeJsonParse(value, fallback) {
     try {
-        const parsed = JSON.parse(safeLocalStorageGet(PHOTO_STORAGE_KEYS.recentMissions, '[]'));
-        return Array.isArray(parsed) ? parsed.filter(Number.isInteger).slice(-12) : [];
+        return JSON.parse(value);
     } catch (error) {
-        return [];
+        return fallback;
     }
+}
+
+function isWorkerConfigured() {
+    return Boolean(
+        PHOTO_UPLOAD_SETTINGS.workerUrl
+        && !PHOTO_UPLOAD_SETTINGS.workerUrl.includes('YOUR_CLOUDFLARE_WORKER_URL')
+    );
+}
+
+function createDeviceId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    return `device-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getDeviceId() {
+    let deviceId = safeLocalStorageGet(PHOTO_STORAGE_KEYS.deviceId, '').trim();
+    if (!deviceId) {
+        deviceId = createDeviceId();
+        safeLocalStorageSet(PHOTO_STORAGE_KEYS.deviceId, deviceId);
+    }
+    return deviceId;
+}
+
+function normalizeFilmState(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const baseLimit = Math.max(1, Number(raw.baseLimit) || PHOTO_UPLOAD_SETTINGS.maxFilesPerGuest);
+    const bonusFrames = Math.max(0, Number(raw.bonusFrames) || 0);
+    const uploadedCount = Math.max(0, Number(raw.uploadedCount) || 0);
+    return {
+        deviceId: String(raw.deviceId || getDeviceId()),
+        shortCode: String(raw.shortCode || '').trim(),
+        guestName: String(raw.guestName || ''),
+        baseLimit,
+        bonusFrames,
+        uploadedCount,
+        totalLimit: Math.max(baseLimit, Number(raw.totalLimit) || baseLimit + bonusFrames),
+        remaining: Math.max(0, Number(raw.remaining) || (baseLimit + bonusFrames - uploadedCount))
+    };
+}
+
+function loadCachedFilmState() {
+    const cached = safeJsonParse(safeLocalStorageGet(PHOTO_STORAGE_KEYS.cachedFilmState, 'null'), null);
+    const normalized = normalizeFilmState(cached);
+    if (normalized && normalized.deviceId === getDeviceId()) serverFilmState = normalized;
+}
+
+function cacheFilmState(state) {
+    const normalized = normalizeFilmState(state);
+    if (!normalized) return;
+    serverFilmState = normalized;
+    safeLocalStorageSet(PHOTO_STORAGE_KEYS.cachedFilmState, JSON.stringify(normalized));
+    safeLocalStorageSet(PHOTO_STORAGE_KEYS.uploadedTotal, String(normalized.uploadedCount));
+}
+
+async function apiRequest(path, { method = 'POST', body, adminPassword } = {}) {
+    if (!isWorkerConfigured()) throw new Error('WORKER_NOT_CONFIGURED');
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (adminPassword) headers.Authorization = `Bearer ${adminPassword}`;
+
+    const response = await fetch(`${PHOTO_UPLOAD_SETTINGS.workerUrl}${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body)
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const error = new Error(payload.error || `HTTP_${response.status}`);
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+    }
+    return payload;
+}
+
+function getPendingConfirmations() {
+    const parsed = safeJsonParse(safeLocalStorageGet(PHOTO_STORAGE_KEYS.pendingConfirmations, '[]'), []);
+    return Array.isArray(parsed)
+        ? [...new Set(parsed.filter((item) => typeof item === 'string' && item.length >= 8))]
+        : [];
+}
+
+function savePendingConfirmations(items) {
+    safeLocalStorageSet(PHOTO_STORAGE_KEYS.pendingConfirmations, JSON.stringify([...new Set(items)]));
+}
+
+function queuePendingConfirmations(uuids) {
+    savePendingConfirmations([...getPendingConfirmations(), ...uuids]);
+}
+
+function getLocalUploadedTotal() {
+    return Math.max(0, Number(safeLocalStorageGet(PHOTO_STORAGE_KEYS.uploadedTotal, '0')) || 0);
+}
+
+function getUploadedPhotoTotal() {
+    if (!serverFilmState) return getLocalUploadedTotal();
+    return Math.min(
+        serverFilmState.totalLimit,
+        serverFilmState.uploadedCount + getPendingConfirmations().length
+    );
+}
+
+function getTotalFrameLimit() {
+    return serverFilmState?.totalLimit || PHOTO_UPLOAD_SETTINGS.maxFilesPerGuest;
+}
+
+function getAvailableFrameCount() {
+    return Math.max(0, getTotalFrameLimit() - getUploadedPhotoTotal());
+}
+
+function getPendingPhotoCount() {
+    return selectedPhotos.filter((photo) => photo.status !== 'success').length;
+}
+
+function getRemainingPhotoCount() {
+    return Math.max(0, getAvailableFrameCount() - getPendingPhotoCount());
+}
+
+function setDeviceCode(code) {
+    const visibleCode = code || '••••';
+    deviceCodeEls.forEach((element) => {
+        element.textContent = visibleCode;
+    });
+}
+
+function setFilmRefillStatus(message, type = '') {
+    if (!filmRefillStatus) return;
+    filmRefillStatus.textContent = message;
+    filmRefillStatus.classList.toggle('is-error', type === 'error');
+    filmRefillStatus.classList.toggle('is-success', type === 'success');
+}
+
+function updateFilmCounter() {
+    if (filmLeftEl) filmLeftEl.textContent = String(getRemainingPhotoCount());
+    setDeviceCode(serverFilmState?.shortCode || '');
+
+    const isExhausted = getAvailableFrameCount() <= 0;
+    if (filmRefill) filmRefill.hidden = !isExhausted;
+    if (!isExhausted && filmCodeForm) filmCodeForm.hidden = true;
+}
+
+function updatePhotoControls() {
+    const hasPendingPhotos = selectedPhotos.some((photo) => photo.status !== 'success');
+    const hasPhotos = selectedPhotos.length > 0;
+    const hasFreeFrames = getRemainingPhotoCount() > 0;
+
+    if (photoSelection) photoSelection.hidden = !hasPhotos;
+    if (uploadPhotosButton) uploadPhotosButton.disabled = !hasPendingPhotos || isUploadingPhotos;
+    if (cameraButton) cameraButton.disabled = isUploadingPhotos || !hasFreeFrames;
+    if (galleryButton) galleryButton.disabled = isUploadingPhotos || !hasFreeFrames;
+    if (clearPhotosButton) clearPhotosButton.disabled = isUploadingPhotos;
+    if (guestNameInput) guestNameInput.disabled = isUploadingPhotos;
+    if (photoNoteInput) photoNoteInput.disabled = isUploadingPhotos;
+
+    if (uploadButtonText) {
+        if (isUploadingPhotos) uploadButtonText.textContent = 'отправляем фотографии…';
+        else if (selectedPhotos.some((photo) => photo.status === 'error')) uploadButtonText.textContent = 'повторить отправку';
+        else uploadButtonText.textContent = 'отправить в общий альбом';
+    }
+
+    updateFilmCounter();
+}
+
+async function syncFilmState({ silent = false } = {}) {
+    if (!isWorkerConfigured() || isSyncingFilmState) return serverFilmState;
+    isSyncingFilmState = true;
+
+    try {
+        const payload = await apiRequest('/api/device/status', {
+            body: {
+                deviceId: getDeviceId(),
+                guestName: guestNameInput?.value.trim() || '',
+                legacyUploadedCount: getLocalUploadedTotal()
+            }
+        });
+        cacheFilmState(payload.device);
+        updatePhotoControls();
+        return serverFilmState;
+    } catch (error) {
+        if (!silent) setFilmRefillStatus('не получилось проверить плёнку. проверьте интернет и попробуйте ещё раз', 'error');
+        return serverFilmState;
+    } finally {
+        isSyncingFilmState = false;
+    }
+}
+
+async function flushPendingConfirmations() {
+    if (!isWorkerConfigured()) return false;
+    const uploadIds = getPendingConfirmations();
+    if (!uploadIds.length) return true;
+
+    try {
+        const payload = await apiRequest('/api/device/confirm', {
+            body: {
+                deviceId: getDeviceId(),
+                uploadIds
+            }
+        });
+        savePendingConfirmations([]);
+        cacheFilmState(payload.device);
+        updatePhotoControls();
+        return true;
+    } catch (error) {
+        updatePhotoControls();
+        return false;
+    }
+}
+
+function getRecentMissionIndexes() {
+    const parsed = safeJsonParse(safeLocalStorageGet(PHOTO_STORAGE_KEYS.recentMissions, '[]'), []);
+    return Array.isArray(parsed) ? parsed.filter(Number.isInteger).slice(-12) : [];
 }
 
 function chooseMission(forceNew = false) {
@@ -266,10 +479,7 @@ function chooseMission(forceNew = false) {
     missionText.textContent = PHOTO_MISSIONS[index];
     missionText.dataset.missionIndex = String(index);
     safeLocalStorageSet(PHOTO_STORAGE_KEYS.currentMission, String(index));
-    safeLocalStorageSet(
-        PHOTO_STORAGE_KEYS.recentMissions,
-        JSON.stringify([...recentIndexes, index].slice(-12))
-    );
+    safeLocalStorageSet(PHOTO_STORAGE_KEYS.recentMissions, JSON.stringify([...recentIndexes, index].slice(-12)));
 
     const card = missionText.closest('.photo-mission');
     if (card) {
@@ -292,7 +502,6 @@ function completeMission() {
 
     const card = missionText?.closest('.photo-mission');
     if (card) card.classList.add('mission-complete');
-
     window.setTimeout(() => {
         if (card) card.classList.remove('mission-complete');
         chooseMission(true);
@@ -320,54 +529,6 @@ function setPhotoStatus(message, type = '') {
     uploadStatus.textContent = message;
     uploadStatus.classList.toggle('is-error', type === 'error');
     uploadStatus.classList.toggle('is-success', type === 'success');
-}
-
-function getUploadedPhotoTotal() {
-    return Math.max(
-        0,
-        Number(safeLocalStorageGet(PHOTO_STORAGE_KEYS.uploadedTotal, '0')) || 0
-    );
-}
-
-function getPendingPhotoCount() {
-    return selectedPhotos.filter((photo) => photo.status !== 'success').length;
-}
-
-function getRemainingPhotoCount() {
-    return Math.max(
-        0,
-        PHOTO_UPLOAD_SETTINGS.maxFilesPerGuest
-            - getUploadedPhotoTotal()
-            - getPendingPhotoCount()
-    );
-}
-
-function updateFilmCounter() {
-    if (!filmLeftEl) return;
-    filmLeftEl.textContent = String(getRemainingPhotoCount());
-}
-
-function updatePhotoControls() {
-    const hasPendingPhotos = selectedPhotos.some((photo) => photo.status !== 'success');
-    const hasPhotos = selectedPhotos.length > 0;
-
-    if (photoSelection) photoSelection.hidden = !hasPhotos;
-    if (uploadPhotosButton) uploadPhotosButton.disabled = !hasPendingPhotos || isUploadingPhotos;
-    const hasFreeFrames = getRemainingPhotoCount() > 0;
-
-    if (cameraButton) cameraButton.disabled = isUploadingPhotos || !hasFreeFrames;
-    if (galleryButton) galleryButton.disabled = isUploadingPhotos || !hasFreeFrames;
-    if (clearPhotosButton) clearPhotosButton.disabled = isUploadingPhotos;
-    if (guestNameInput) guestNameInput.disabled = isUploadingPhotos;
-    if (photoNoteInput) photoNoteInput.disabled = isUploadingPhotos;
-
-    if (uploadButtonText) {
-        if (isUploadingPhotos) uploadButtonText.textContent = 'отправляем фотографии…';
-        else if (selectedPhotos.some((photo) => photo.status === 'error')) uploadButtonText.textContent = 'повторить отправку';
-        else uploadButtonText.textContent = 'отправить в общий альбом';
-    }
-
-    updateFilmCounter();
 }
 
 function createPhotoPreviewCard(photo, index) {
@@ -404,7 +565,6 @@ function createPhotoPreviewCard(photo, index) {
     const progress = document.createElement('span');
     progress.className = 'polaroid-progress';
     progress.style.setProperty('--upload-progress', `${photo.progress}%`);
-
     media.append(image, fallback, state, progress);
 
     const caption = document.createElement('figcaption');
@@ -427,8 +587,7 @@ function createPhotoPreviewCard(photo, index) {
 }
 
 function renderPhotoPreviews() {
-    if (!photoPreview) return;
-    photoPreview.replaceChildren(...selectedPhotos.map(createPhotoPreviewCard));
+    if (photoPreview) photoPreview.replaceChildren(...selectedPhotos.map(createPhotoPreviewCard));
     updatePhotoControls();
 }
 
@@ -456,11 +615,10 @@ function addPhotos(fileList) {
     });
 
     renderPhotoPreviews();
-
     const messages = [];
     if (files.length !== imageFiles.length) messages.push('файлы не в формате изображения пропущены');
-    if (tooLarge.length) messages.push('фотографии больше 100 МБ пропущены');
-    if (uniqueFiles.length > slotsLeft) messages.push(`с этого устройства можно отправить не больше ${PHOTO_UPLOAD_SETTINGS.maxFilesPerGuest} фотографий всего`);
+    if (tooLarge.length) messages.push('фотографии больше 99 МБ пропущены');
+    if (uniqueFiles.length > slotsLeft) messages.push(`на этой плёнке осталось только ${slotsLeft} кадров`);
 
     if (messages.length) setPhotoStatus(messages.join(' · '), 'error');
     else if (filesToAdd.length) setPhotoStatus(`выбрано фотографий: ${selectedPhotos.length}`);
@@ -502,7 +660,22 @@ function refreshPhotoCard(photo) {
     }
 }
 
-function uploadSinglePhoto(photo, metadata) {
+async function getSecureUploadCredentials(requestedCount) {
+    if (!PHOTO_UPLOAD_SETTINGS.signedUploads) return null;
+    const payload = await apiRequest('/api/device/signature', {
+        body: {
+            deviceId: getDeviceId(),
+            requestedCount
+        }
+    });
+    cacheFilmState(payload.device);
+    return {
+        signature: String(payload.signature || ''),
+        expire: String(payload.expire || '')
+    };
+}
+
+function uploadSinglePhoto(photo, metadata, credentials) {
     return new Promise((resolve, reject) => {
         const formData = new FormData();
         formData.append('UPLOADCARE_PUB_KEY', PHOTO_UPLOAD_SETTINGS.publicKey);
@@ -514,6 +687,12 @@ function uploadSinglePhoto(photo, metadata) {
         formData.append('metadata[note]', metadata.note.slice(0, 512));
         formData.append('metadata[batch_id]', metadata.batchId);
         formData.append('metadata[uploaded_at]', metadata.uploadedAt);
+        formData.append('metadata[device_id]', metadata.deviceId.slice(0, 512));
+        formData.append('metadata[device_code]', metadata.deviceCode.slice(0, 512));
+        if (credentials?.signature && credentials?.expire) {
+            formData.append('signature', credentials.signature);
+            formData.append('expire', credentials.expire);
+        }
         formData.append('file', photo.file, photo.file.name);
 
         const request = new XMLHttpRequest();
@@ -532,14 +711,12 @@ function uploadSinglePhoto(photo, metadata) {
                 reject(new Error(`Upload failed: ${request.status}`));
                 return;
             }
-
             const response = request.response || {};
             const uuid = Object.values(response)[0];
             if (typeof uuid !== 'string') {
                 reject(new Error('Upload response does not contain UUID'));
                 return;
             }
-
             photo.uuid = uuid;
             photo.progress = 100;
             resolve(uuid);
@@ -554,14 +731,33 @@ function uploadSinglePhoto(photo, metadata) {
 async function uploadSelectedPhotos() {
     if (isUploadingPhotos) return;
 
-    const publicKey = PHOTO_UPLOAD_SETTINGS.publicKey.trim();
-    if (!publicKey || publicKey === 'YOUR_UPLOADCARE_PUBLIC_KEY') {
-        setPhotoStatus('облачный альбом ещё не подключён: вставьте Public Key Uploadcare в PHOTO_UPLOAD_SETTINGS в файле script.js', 'error');
+    if (!PHOTO_UPLOAD_SETTINGS.publicKey || PHOTO_UPLOAD_SETTINGS.publicKey === 'YOUR_UPLOADCARE_PUBLIC_KEY') {
+        setPhotoStatus('облачный альбом ещё не подключён: добавьте Public Key Uploadcare в config.js', 'error');
         return;
+    }
+
+    if (isWorkerConfigured()) {
+        await syncFilmState({ silent: true });
+        await flushPendingConfirmations();
     }
 
     const pendingPhotos = selectedPhotos.filter((photo) => photo.status !== 'success');
     if (!pendingPhotos.length) return;
+    if (pendingPhotos.length > getAvailableFrameCount()) {
+        setPhotoStatus('на плёнке не хватает свободных кадров. уберите лишние фотографии или получите новую плёнку', 'error');
+        updatePhotoControls();
+        return;
+    }
+
+    let uploadCredentials = null;
+    if (PHOTO_UPLOAD_SETTINGS.signedUploads) {
+        try {
+            uploadCredentials = await getSecureUploadCredentials(pendingPhotos.length);
+        } catch (error) {
+            setPhotoStatus('не получилось получить разрешение на загрузку. проверьте интернет и попробуйте снова', 'error');
+            return;
+        }
+    }
 
     const guestName = guestNameInput?.value.trim() || 'анонимный гость';
     const note = photoNoteInput?.value.trim() || '';
@@ -572,7 +768,9 @@ async function uploadSelectedPhotos() {
         note,
         mission,
         batchId,
-        uploadedAt: new Date().toISOString()
+        uploadedAt: new Date().toISOString(),
+        deviceId: getDeviceId(),
+        deviceCode: serverFilmState?.shortCode || ''
     };
 
     safeLocalStorageSet(PHOTO_STORAGE_KEYS.guestName, guestName === 'анонимный гость' ? '' : guestName);
@@ -587,8 +785,9 @@ async function uploadSelectedPhotos() {
     let nextIndex = 0;
     let successCount = 0;
     let errorCount = 0;
+    const uploadedUuids = [];
 
-    async function worker() {
+    async function uploadWorker() {
         while (nextIndex < pendingPhotos.length) {
             const currentIndex = nextIndex;
             nextIndex += 1;
@@ -597,8 +796,9 @@ async function uploadSelectedPhotos() {
             refreshPhotoCard(photo);
 
             try {
-                await uploadSinglePhoto(photo, metadata);
+                const uuid = await uploadSinglePhoto(photo, metadata, uploadCredentials);
                 photo.status = 'success';
+                uploadedUuids.push(uuid);
                 successCount += 1;
             } catch (error) {
                 photo.status = 'error';
@@ -610,23 +810,26 @@ async function uploadSelectedPhotos() {
     }
 
     const workerCount = Math.min(PHOTO_UPLOAD_SETTINGS.concurrentUploads, pendingPhotos.length);
-    await Promise.all(Array.from({ length: workerCount }, worker));
-
+    await Promise.all(Array.from({ length: workerCount }, uploadWorker));
     isUploadingPhotos = false;
-    const previousUploadedTotal = Math.max(0, Number(safeLocalStorageGet(PHOTO_STORAGE_KEYS.uploadedTotal, '0')) || 0);
-    safeLocalStorageSet(
-        PHOTO_STORAGE_KEYS.uploadedTotal,
-        String(
-            Math.min(
-                PHOTO_UPLOAD_SETTINGS.maxFilesPerGuest,
-                previousUploadedTotal + successCount
-            )
-        )
-    );
+
+    let counterSynced = true;
+    if (successCount) {
+        if (isWorkerConfigured()) {
+            queuePendingConfirmations(uploadedUuids);
+            counterSynced = await flushPendingConfirmations();
+        } else {
+            safeLocalStorageSet(
+                PHOTO_STORAGE_KEYS.uploadedTotal,
+                String(Math.min(getTotalFrameLimit(), getLocalUploadedTotal() + successCount))
+            );
+        }
+    }
     renderPhotoPreviews();
 
     if (!errorCount) {
-        setPhotoStatus(`готово! ${successCount === 1 ? 'фотография сохранена' : `${successCount} фотографий сохранены`} в общем альбоме ♡`, 'success');
+        const syncNote = counterSynced ? '' : ' счётчик обновится, когда появится интернет.';
+        setPhotoStatus(`готово! ${successCount === 1 ? 'фотография сохранена' : `${successCount} фотографий сохранены`} в общем альбоме ♡${syncNote}`, 'success');
         window.setTimeout(() => {
             selectedPhotos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
             selectedPhotos = [];
@@ -638,16 +841,86 @@ async function uploadSelectedPhotos() {
     }
 }
 
+async function checkForRefill() {
+    const before = getAvailableFrameCount();
+    setFilmRefillStatus('проверяем новую плёнку…');
+    const state = await syncFilmState({ silent: true });
+    if (!state) {
+        setFilmRefillStatus('не получилось связаться с фотолабораторией. попробуйте ещё раз', 'error');
+        return;
+    }
+
+    const after = getAvailableFrameCount();
+    if (after > before) {
+        setFilmRefillStatus(`новая плёнка заряжена: доступно ${after} кадров ♡`, 'success');
+        setPhotoStatus(`новая плёнка заряжена: доступно ${after} кадров ♡`, 'success');
+        if (filmCard) {
+            filmCard.classList.remove('film-refilled');
+            void filmCard.offsetWidth;
+            filmCard.classList.add('film-refilled');
+        }
+    } else {
+        setFilmRefillStatus('новых кадров пока нет. покажите организатору код плёнки', 'error');
+    }
+}
+
+async function redeemFilmCode(event) {
+    event.preventDefault();
+    if (!isWorkerConfigured()) {
+        setFilmRefillStatus('сервер фотоплёнки ещё не подключён', 'error');
+        return;
+    }
+
+    const code = filmCodeInput?.value.trim().toUpperCase().replace(/\s+/g, '');
+    if (!code) {
+        setFilmRefillStatus('введите код дополнительной плёнки', 'error');
+        return;
+    }
+
+    setFilmRefillStatus('заряжаем плёнку…');
+    try {
+        const payload = await apiRequest('/api/device/redeem', {
+            body: {
+                deviceId: getDeviceId(),
+                code,
+                guestName: guestNameInput?.value.trim() || ''
+            }
+        });
+        cacheFilmState(payload.device);
+        if (filmCodeInput) filmCodeInput.value = '';
+        if (filmCodeForm) filmCodeForm.hidden = true;
+        setFilmRefillStatus(`готово: добавлено ${payload.framesAdded} кадров ♡`, 'success');
+        setPhotoStatus(`готово: добавлено ${payload.framesAdded} кадров ♡`, 'success');
+        updatePhotoControls();
+        if (filmCard) {
+            filmCard.classList.remove('film-refilled');
+            void filmCard.offsetWidth;
+            filmCard.classList.add('film-refilled');
+        }
+    } catch (error) {
+        const message = error.status === 404
+            ? 'такой код не найден'
+            : error.status === 409
+                ? 'эта дополнительная плёнка уже была использована'
+                : 'не получилось активировать код. попробуйте ещё раз';
+        setFilmRefillStatus(message, 'error');
+    }
+}
+
+async function saveGuestNameToServer() {
+    safeLocalStorageSet(PHOTO_STORAGE_KEYS.guestName, guestNameInput?.value.trim() || '');
+    await syncFilmState({ silent: true });
+}
+
 if (missionText) {
     chooseMission(false);
     updateMissionCount();
 }
 
+loadCachedFilmState();
 if (guestNameInput) {
     guestNameInput.value = safeLocalStorageGet(PHOTO_STORAGE_KEYS.guestName, '');
-    guestNameInput.addEventListener('change', () => {
-        safeLocalStorageSet(PHOTO_STORAGE_KEYS.guestName, guestNameInput.value.trim());
-    });
+    guestNameInput.addEventListener('change', saveGuestNameToServer);
 }
 
 newMissionButton?.addEventListener('click', () => chooseMission(true));
@@ -658,5 +931,20 @@ cameraInput?.addEventListener('change', (event) => addPhotos(event.target.files)
 galleryInput?.addEventListener('change', (event) => addPhotos(event.target.files));
 clearPhotosButton?.addEventListener('click', clearSelectedPhotos);
 uploadPhotosButton?.addEventListener('click', uploadSelectedPhotos);
+checkRefillButton?.addEventListener('click', checkForRefill);
+toggleRedeemButton?.addEventListener('click', () => {
+    if (!filmCodeForm) return;
+    filmCodeForm.hidden = !filmCodeForm.hidden;
+    if (!filmCodeForm.hidden) filmCodeInput?.focus();
+});
+filmCodeForm?.addEventListener('submit', redeemFilmCode);
+filmCodeInput?.addEventListener('input', () => {
+    filmCodeInput.value = filmCodeInput.value.toUpperCase();
+});
 
 updatePhotoControls();
+if (isWorkerConfigured()) {
+    syncFilmState({ silent: true })
+        .then(() => flushPendingConfirmations())
+        .catch(() => undefined);
+}

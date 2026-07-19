@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ru">
 <head>
     <meta charset="utf-8" />
@@ -178,6 +178,7 @@
             <div class="film-counter" aria-live="polite">
               <strong data-film-left>12</strong>
               <span>кадров свободно</span>
+              <small class="film-device-code">код плёнки <b data-device-code>••••</b></small>
             </div>
           </div>
 
@@ -203,6 +204,24 @@
                 <input type="text" data-photo-note maxlength="140" placeholder="например, привет от третьего стола" />
               </label>
             </div>
+
+            <section class="film-refill" data-film-refill hidden aria-labelledby="filmRefillTitle">
+              <span class="film-refill-tape" aria-hidden="true"></span>
+              <p class="film-refill-title" id="filmRefillTitle">плёнка закончилась ♡</p>
+              <p class="film-refill-copy">ваши кадры уже в общем альбоме. чтобы продолжить, покажите организатору код <b data-refill-device-code>••••</b> или активируйте дополнительную плёнку.</p>
+              <div class="film-refill-actions">
+                <button class="text-button" type="button" data-check-refill>проверить новую плёнку</button>
+                <button class="text-button" type="button" data-toggle-redeem>у меня есть код</button>
+              </div>
+              <form class="film-code-form" data-film-code-form hidden>
+                <label>
+                  <span>код дополнительной плёнки</span>
+                  <input type="text" data-film-code-input inputmode="text" autocomplete="off" maxlength="20" placeholder="FILM-AB12CD" />
+                </label>
+                <button type="submit">зарядить плёнку</button>
+              </form>
+              <p class="film-refill-status" data-film-refill-status aria-live="polite"></p>
+            </section>
 
             <div class="photo-picker-actions">
               <button class="photo-picker-button" type="button" data-open-camera>
@@ -240,6 +259,7 @@
       </section>
     </section>
   </main>
+  <script src="config.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

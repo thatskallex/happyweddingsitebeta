@@ -1386,3 +1386,191 @@ h1 { display: none; }
     padding: 0 3px;
   }
 }
+
+/* Дополнительные фотоплёнки */
+.film-device-code {
+  display: block;
+  margin-top: 5px;
+  color: rgba(145, 130, 119, .9);
+  font-family: "Nunito", system-ui, sans-serif;
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: .035em;
+  white-space: nowrap;
+}
+
+.film-device-code b {
+  color: var(--aqua-deep);
+  font-size: 10px;
+  letter-spacing: .12em;
+}
+
+.film-refill {
+  position: relative;
+  width: min(100%, 520px);
+  margin: 0 auto 16px;
+  padding: 26px 18px 17px;
+  border: 1px solid rgba(199, 111, 135, .22);
+  border-radius: 17px;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(245, 194, 74, .13), transparent 9rem),
+    rgba(255, 250, 244, .88);
+  box-shadow: 6px 8px 0 rgba(199, 111, 135, .08);
+  text-align: center;
+  transform: rotate(-.18deg);
+}
+
+.film-refill[hidden] {
+  display: none;
+}
+
+.film-refill-tape {
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  width: 78px;
+  height: 19px;
+  border: 1px solid rgba(229, 140, 47, .12);
+  background: rgba(245, 194, 74, .42);
+  transform: translateX(-50%) rotate(1.2deg);
+}
+
+.film-refill-title {
+  margin: 0 0 7px;
+  color: var(--rose);
+  font-family: "Caveat", "Segoe Print", cursive;
+  font-size: clamp(27px, 4.5vw, 34px);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.film-refill-copy {
+  width: min(100%, 430px);
+  margin: 0 auto;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.film-refill-copy b {
+  display: inline-block;
+  color: var(--aqua-deep);
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: .12em;
+}
+
+.film-refill-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 16px;
+  margin-top: 13px;
+}
+
+.film-code-form {
+  width: min(100%, 390px);
+  margin: 15px auto 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.film-code-form[hidden] {
+  display: none;
+}
+
+.film-code-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  text-align: left;
+}
+
+.film-code-form label span {
+  color: var(--green-deep);
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.film-code-form input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  border: 1px solid rgba(75, 143, 154, .28);
+  border-radius: 13px;
+  background: #fffdf8;
+  color: var(--aqua-deep);
+  padding: 9px 11px;
+  outline: none;
+  font: 900 13px/1 "Nunito", system-ui, sans-serif;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.film-code-form input:focus {
+  border-color: rgba(31, 126, 148, .55);
+  box-shadow: 0 0 0 4px rgba(57, 168, 186, .09);
+}
+
+.film-code-form button {
+  appearance: none;
+  height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--aqua-deep);
+  color: #fffdf8;
+  padding: 0 15px;
+  cursor: pointer;
+  font: 900 11px/1 "Nunito", system-ui, sans-serif;
+  white-space: nowrap;
+}
+
+.film-refill-status {
+  min-height: 16px;
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.film-refill-status.is-success {
+  color: var(--green-deep);
+}
+
+.film-refill-status.is-error {
+  color: #a74747;
+}
+
+.film-card.film-refilled {
+  animation: filmRefilled .75s ease both;
+}
+
+@keyframes filmRefilled {
+  0%, 100% { transform: translateY(0); }
+  35% { transform: translateY(-3px) rotate(.12deg); box-shadow: 0 18px 36px rgba(31, 126, 148, .13); }
+}
+
+@media (max-width: 520px) {
+  .film-refill {
+    padding: 24px 13px 15px;
+  }
+
+  .film-refill-actions {
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .film-code-form {
+    grid-template-columns: 1fr;
+  }
+
+  .film-code-form button {
+    width: 100%;
+  }
+}
